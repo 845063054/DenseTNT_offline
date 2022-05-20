@@ -167,7 +167,7 @@ python3 src/run.py --argoverse --future_frame_num 30 \
     stage_one stage_one_dynamic=0.95 laneGCN-4 point_level-4-3 complete_traj \
     set_predict=6 set_predict-6 data_ratio_per_epoch=0.4 set_predict-topk=0 set_predict-one_encoder set_predict-MRratio=1.0 \
     set_predict-train_recover=models.densetnt.set_predict.1/model_save/model.16.bin --do_eval \
-    --data_dir_for_val /media/jiangtao.li/simu_machine_dat/argoverse/val_200/data/ --reuse_temp_file # --visualize
+    --data_dir_for_val /home/user/Dense_database/val/data --reuse_temp_file # --visualize
 ```
 and changed codes of the model loading part accrodingly. Result:
 ```

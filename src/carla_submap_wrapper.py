@@ -1,111 +1,23 @@
-
+import carla
 import uuid
 import numpy as np
-import carla
 
 lane_sample_resolution = 1.0
 max_lane_sample_distance_when_straight = 5.0
 pixels_per_meter = 2
 raster_size = [ 224, 224 ]
 
-
-def lateral_shift(transform,shift):
-    transform.rotation.yaw += 90
-    return transform.location + shift * transform.get_forward_vector()
-
-
-def x_to_world_transformation(transform):
-    """
-    Get the transformation matrix from x(it can be vehicle or sensor)
-    coordinates to world coordinate.
-
-    Parameters
-    ----------
-    transform : carla.Transform
-        The transform that contains location and rotation
-
-    Returns
-    -------
-    matrix : np.ndarray
-        The transformation matrx.
-
-    """
-    rotation = transform.rotation
-    location = transform.location
-
-    # used for rotation matrix
-    c_y = np.cos(np.radians(rotation.yaw))
-    s_y = np.sin(np.radians(rotation.yaw))
-    c_r = np.cos(np.radians(rotation.roll))
-    s_r = np.sin(np.radians(rotation.roll))
-    c_p = np.cos(np.radians(rotation.pitch))
-    s_p = np.sin(np.radians(rotation.pitch))
-
-    matrix = np.identity(4)
-    # translation matrix
-    matrix[0, 3] = location.x
-    matrix[1, 3] = location.y
-    matrix[2, 3] = location.z
-
-    # rotation matrix
-    matrix[0, 0] = c_p * c_y
-    matrix[0, 1] = c_y * s_p * s_r - s_y * c_r
-    matrix[0, 2] = -c_y * s_p * c_r - s_y * s_r
-    matrix[1, 0] = s_y * c_p
-    matrix[1, 1] = s_y * s_p * s_r + c_y * c_r
-    matrix[1, 2] = -s_y * s_p * c_r + c_y * s_r
-    matrix[2, 0] = s_p
-    matrix[2, 1] = -c_p * s_r
-    matrix[2, 2] = c_p * c_r
-
-    return matrix
-
-
-def list_loc2array(list_location):
-        """
-        Convert list of carla location to np.array
-        Parameters
-        ----------
-        list_location : list
-            List of carla locations.
-
-        Returns
-        -------
-        loc_array : np.array
-            Numpy array of shape (N, 3)
-        """
-        loc_array = np.zeros((len(list_location), 3))
-        for (i, carla_location) in enumerate(list_location):
-            loc_array[i, 0] = carla_location.x
-            loc_array[i, 1] = carla_location.y
-            loc_array[i, 2] = carla_location.z
-        return loc_array
-
-
-def list_wpt2array(list_wpt):
-    """
-    Convert list of carla transform to np.array
-    Parameters
-    ----------
-    list_wpt : list
-        List of carla waypoint.
-
-    Returns
-    -------
-    loc_array : np.array
-        Numpy array of shape (N, 3)
-    """
-    loc_array = np.zeros((len(list_wpt), 3))
-    for (i, carla_wpt) in enumerate(list_wpt):
-        loc_array[i, 0] = carla_wpt.transform.location.x
-        loc_array[i, 1] = carla_wpt.transform.location.y
-        loc_array[i, 2] = carla_wpt.transform.location.z
-    return loc_array
-
 def distance_wp(wp1, wp2):
     pos1 = np.array([wp1.transform.location.x, wp1.transform.location.y])
     pos2 = np.array([wp2.transform.location.x, wp2.transform.location.y])
     return np.linalg.norm(pos1-pos2)
+
+def should_remove_wp(wp0, wp1, wp2):
+    if abs(wp0.transform.rotation.yaw - wp1.transform.rotation.yaw) < 1.0 and \
+        abs(wp1.transform.rotation.yaw - wp2.transform.rotation.yaw) < 1.0 and \
+        distance_wp(wp0, wp2) <  max_lane_sample_distance_when_straight:
+        return True
+    return False
 
 def get_all_lane_info(carla_map):
     """
@@ -122,13 +34,6 @@ def get_all_lane_info(carla_map):
     topology = [x[0] for x in carla_map.get_topology()]
     # sort by altitude
     topology = sorted(topology, key=lambda w: w.transform.location.z)
-
-    def should_remove_wp(wp0, wp1, wp2):
-        if abs(wp0.transform.rotation.yaw - wp1.transform.rotation.yaw) < 1.0 and \
-            abs(wp1.transform.rotation.yaw - wp2.transform.rotation.yaw) < 1.0 and \
-            distance_wp(wp0, wp2) <  max_lane_sample_distance_when_straight:
-            return True
-        return False
 
     # loop all waypoints to get lane information
     for (i, waypoint) in enumerate(topology):
@@ -177,7 +82,6 @@ def get_all_lane_info(carla_map):
 
     np.save('bound_info.npy', bound_info,allow_pickle=True)
     np.save('lane_info.npy', lane_info,allow_pickle=True)
-    return bound_info, lane_info
 
 
 def get_lane_ids_in_xy_bbox(x,y,bound_info,query_search_range_manhattan):
@@ -275,7 +179,7 @@ def get_lane_segment_polygon(lane_id, lane_info_):
     return lane_area
 
 
-def find_local_lane_centerlines(position,bound_info,lane_info,query_search_range_manhattan) -> np.ndarray:
+def find_local_lane_centerlines(x,y,bound_info,lane_info,query_search_range_manhattan) -> np.ndarray:
     """
     Find local lane centerline to the specified x,y location
 
@@ -287,11 +191,12 @@ def find_local_lane_centerlines(position,bound_info,lane_info,query_search_range
     Returns
         local_lane_centerlines: Array of arrays, representing an array of lane centerlines, each a polyline
     """
-    lane_ids = get_lane_ids_in_xy_bbox(position,bound_info,query_search_range_manhattan)
+    lane_ids = get_lane_ids_in_xy_bbox(x,y,bound_info,query_search_range_manhattan)
     local_lane_centerlines = [get_lane_segment_centerline(lane_id,lane_info) for lane_id in lane_ids]
     return np.array(local_lane_centerlines)
 
 
+@staticmethod
 def get_bounds(left_lane, right_lane):
     """
     Get boundary information of a lane.
@@ -343,7 +248,7 @@ def world_to_sensor(cords, sensor_transform):
     return sensor_cords
 
 
-def city_lane_centerlines_dict(lane_id, lane_info):
+def city_lane_centerlines_dict(lane_info, lane_id):
     lane_centerlines_dict = {}
     lane_centerlines_dict['has_traffic_control'] = lane_info[lane_id]['has_traffic_control']  # True or Fasle
 
@@ -359,3 +264,97 @@ def city_lane_centerlines_dict(lane_id, lane_info):
     lane_centerlines_dict['is_intersection'] = lane_info[lane_id]['is_intersection'] #  True or Fasle
 
     return lane_centerlines_dict
+
+
+def lateral_shift(transform,shift):
+    transform.rotation.yaw += 90
+    return transform.location + shift * transform.get_forward_vector()
+
+
+def x_to_world_transformation(transform):
+    """
+    Get the transformation matrix from x(it can be vehicle or sensor)
+    coordinates to world coordinate.
+
+    Parameters
+    ----------
+    transform : carla.Transform
+        The transform that contains location and rotation
+
+    Returns
+    -------
+    matrix : np.ndarray
+        The transformation matrx.
+
+    """
+    rotation = transform.rotation
+    location = transform.location
+
+    # used for rotation matrix
+    c_y = np.cos(np.radians(rotation.yaw))
+    s_y = np.sin(np.radians(rotation.yaw))
+    c_r = np.cos(np.radians(rotation.roll))
+    s_r = np.sin(np.radians(rotation.roll))
+    c_p = np.cos(np.radians(rotation.pitch))
+    s_p = np.sin(np.radians(rotation.pitch))
+
+    matrix = np.identity(4)
+    # translation matrix
+    matrix[0, 3] = location.x
+    matrix[1, 3] = location.y
+    matrix[2, 3] = location.z
+
+    # rotation matrix
+    matrix[0, 0] = c_p * c_y
+    matrix[0, 1] = c_y * s_p * s_r - s_y * c_r
+    matrix[0, 2] = -c_y * s_p * c_r - s_y * s_r
+    matrix[1, 0] = s_y * c_p
+    matrix[1, 1] = s_y * s_p * s_r + c_y * c_r
+    matrix[1, 2] = -s_y * s_p * c_r + c_y * s_r
+    matrix[2, 0] = s_p
+    matrix[2, 1] = -c_p * s_r
+    matrix[2, 2] = c_p * c_r
+
+    return matrix
+
+
+def list_loc2array(list_location):
+        """
+        Convert list of carla location to np.array
+        Parameters
+        ----------
+        list_location : list
+            List of carla locations.
+
+        Returns
+        -------
+        loc_array : np.array
+            Numpy array of shape (N, 3)
+        """
+        loc_array = np.zeros((len(list_location), 3))
+        for (i, carla_location) in enumerate(list_location):
+            loc_array[i, 0] = carla_location.x
+            loc_array[i, 1] = carla_location.y
+            loc_array[i, 2] = carla_location.z
+        return loc_array
+
+
+def list_wpt2array(list_wpt):
+    """
+    Convert list of carla transform to np.array
+    Parameters
+    ----------
+    list_wpt : list
+        List of carla waypoint.
+
+    Returns
+    -------
+    loc_array : np.array
+        Numpy array of shape (N, 3)
+    """
+    loc_array = np.zeros((len(list_wpt), 3))
+    for (i, carla_wpt) in enumerate(list_wpt):
+        loc_array[i, 0] = carla_wpt.transform.location.x
+        loc_array[i, 1] = carla_wpt.transform.location.y
+        loc_array[i, 2] = carla_wpt.transform.location.z
+    return loc_array

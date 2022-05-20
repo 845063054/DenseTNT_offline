@@ -40,7 +40,6 @@ class MLP(nn.Module):
         hidden_states = torch.nn.functional.relu(hidden_states)
         return hidden_states
 
-
 class GlobalGraph(nn.Module):
     r"""
     Global graph
@@ -90,7 +89,6 @@ class GlobalGraph(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
         key_layer = self.transpose_for_scores(mixed_key_layer)
         value_layer = self.transpose_for_scores(mixed_value_layer)
-
         attention_scores = torch.matmul(
             query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
         # print(attention_scores.shape, attention_mask.shape)
