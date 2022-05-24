@@ -1,0 +1,46 @@
+# define carla simulation setting
+world:
+  sync_mode: True
+  client_port: 2000
+  map_name: 'Town04'
+  seed: 11
+  timeout: 20
+  weather:
+    sun_altitude_angle: 15 # 90 is the midday and -90 is the midnight
+    cloudiness: 0 # 0 is the clean sky and 100 is the thickest cloud
+    precipitation: 0 # rain, 100 is the heaviest rain
+    precipitation_deposits: 0 # Determines the creation of puddles. Values range from 0 to 100, being 0 none at all and 100 a road completely capped with water.
+    wind_intensity: 0 # it will influence the rain
+    fog_density: 0 # fog thickness, 100 is the largest
+    fog_distance: 0  # Fog start distance. Values range from 0 to infinite.
+    fog_falloff: 0 # Density of the fog (as in specific mass) from 0 to infinity. The bigger the value, the more dense and heavy it will be, and the fog will reach smaller heights
+    wetness: 0
+
+traffic_manager:
+  filterv: "vehicle.*"
+  generationv: "All"
+  sync_mode: True # has to be same as the world setting
+  fixed_delta_seconds: &delta 0.01
+  substeping: True
+  max_substeps: 1
+  max_substep_delta_time: 0.01
+  number_of_vehicles: 20
+  global_distance_to_leading_vehicle: 2.5
+  global_percentage_speed_difference: 30
+  hybrid_physics_radius: 70
+  hybrid_physics_mode: False
+  respawn_dormant_vehicles: False
+  random_device_seed: 12000 # 80899 # random seed, None
+  ignore_signs_percentage: 100
+
+map_manager: &base_map_manager
+  pixels_per_meter: 2
+  raster_size: [ 224, 224 ]
+  lane_sample_resolution: 0.5
+  visualize: false
+  activate: false
+
+save_parameters:
+  trajectory_path: '/home/user/Database/Dense_carla_dataset/val/'
+  max_trajectory_size: 50
+  save_number: 10

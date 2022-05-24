@@ -1,271 +1,258 @@
+from ast import If
 import os
-from sqlite3 import Timestamp
+from re import T
 import sys
+from tkinter import N
 import carla
 import math
 import csv
+import logging
 from yaml_utils import load_yaml
-from carla_map_api import MapManager
+from numpy import random
 import time
-from collections import deque
-import numpy as np
+from carla_submap_wrapper import get_all_lane_info
 
-class PIDLongitudinalController():
+class CarlaSyncModeWithTraffic(object):
     """
-    PIDLongitudinalController implements longitudinal control using a PID.
+    Carla client manager with traffic
     """
-    def __init__(self, vehicle, K_P=1.0, K_I=0.0, K_D=0.0, dt=0.03):
-        """
-        Constructor method.
-
-            :param vehicle: actor to apply to local planner logic onto
-            :param K_P: Proportional term
-            :param K_D: Differential term
-            :param K_I: Integral term
-            :param dt: time differential in seconds
-        """
-        self._vehicle = vehicle
-        self._k_p = K_P
-        self._k_i = K_I
-        self._k_d = K_D
-        self._dt = dt
-        self._error_buffer = deque(maxlen=10)
-
-    def run_step(self, target_speed, debug=False):
-        """
-        Execute one step of longitudinal control to reach a given target speed.
-
-            :param target_speed: target speed in Km/h
-            :param debug: boolean for debugging
-            :return: throttle control
-        """
-        current_speed = self.get_speed(self._vehicle)
-
-        print('Current speed = {}'.format(current_speed))
-
-        acceleration = self._pid_control(target_speed, current_speed)
-        
-        if acceleration >= 0.0:
-            throttle = min(acceleration, 1.0)
-            brake = 0.0
-        else:
-            throttle = 0.0
-            brake = min(abs(acceleration), 1.0)
-        
-        return throttle,brake
-
-    def _pid_control(self, target_speed, current_speed):
-        """
-        Estimate the throttle/brake of the vehicle based on the PID equations
-
-            :param target_speed:  target speed in Km/h
-            :param current_speed: current speed of the vehicle in Km/h
-            :return: throttle/brake control
-        """
-
-        error = target_speed - current_speed
-        self._error_buffer.append(error)
-
-        if len(self._error_buffer) >= 2:
-            _de = (self._error_buffer[-1] - self._error_buffer[-2]) / self._dt
-            _ie = sum(self._error_buffer) * self._dt
-        else:
-            _de = 0.0
-            _ie = 0.0
-
-        return np.clip((self._k_p * error) + (self._k_d * _de) + (self._k_i * _ie), -1.0, 1.0)
-
-    def change_parameters(self, K_P, K_I, K_D, dt):
-        """Changes the PID parameters"""
-        self._k_p = K_P
-        self._k_i = K_I
-        self._k_d = K_D
-        self._dt = dt
-
-    def get_speed(self,vehicle):
-        vel = vehicle.get_velocity()
-
-        return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
-
-
-def set_weather(weather_settings):
-    """
-    Set CARLA weather params.
-    """
-    weather = carla.WeatherParameters(
-        sun_altitude_angle=weather_settings['sun_altitude_angle'],
-        cloudiness=weather_settings['cloudiness'],
-        precipitation=weather_settings['precipitation'],
-        precipitation_deposits=weather_settings['precipitation_deposits'],
-        wind_intensity=weather_settings['wind_intensity'],
-        fog_density=weather_settings['fog_density'],
-        fog_distance=weather_settings['fog_distance'],
-        fog_falloff=weather_settings['fog_falloff'],
-        wetness=weather_settings['wetness']
-    )
-    return weather
-
-
-def rotate(x, y, angle):
-    res_x = x * math.cos(angle) - y * math.sin(angle)
-    res_y = x * math.sin(angle) + y * math.cos(angle)
-    return res_x, res_y
-
-
-def run_step():
-    try:
+    def __init__(self):
         config_yaml = os.path.join(os.path.dirname(os.path.realpath(__file__)),'carla_config.yaml')
         if not os.path.isfile(config_yaml):
             sys.exit("carla_config.yaml not found!")
-        config_params = load_yaml(config_yaml)
-        world_params = config_params['world']
-        # load the carla client
-        client = carla.Client('localhost', world_params["client_port"])
-        client.set_timeout(world_params["timeout"])
-        client.load_world(world_params["map_name"])
-        world = client.get_world()
-        carla_map = world.get_map()
-        origin_settings = world.get_settings()
-        blueprint_library = world.get_blueprint_library()
-        #set the sync_mode
-        settings = world.get_settings()     
-        settings.fixed_delta_seconds = world_params['fixed_delta_seconds']
-        settings.synchronous_mode = world_params['sync_mode']
-
-        # set weather
-        weather = set_weather(world_params["weather"])
-        world.set_weather(weather)
-
-        # set the traffic manager sync
-        tarffic_manager_params = config_params['traffic_manager']
-        traffic_manager_ = client.get_trafficmanager()
-        traffic_manager_.set_synchronous_mode(tarffic_manager_params['sync_mode'])
-        world.apply_settings(settings)
-        world.tick()
-
-        ego_params = config_params['ego_vehicle']
-        # vehicle_transform = carla.Transform(carla.Location(x=ego_params['spawn_position'][0],
-        #                         y=ego_params['spawn_position'][1],
-        #                         z=ego_params['spawn_position'][2]),
-        #                     carla.Rotation(
-        #                         pitch=ego_params['spawn_position'][3],
-        #                         yaw=ego_params['spawn_position'][4],
-        #                         roll=ego_params['spawn_position'][5]))
-
-        all_default_spawn = world.get_map().get_spawn_points()
-        vehicle_transform = all_default_spawn[0]
-        print(vehicle_transform)
+        self.config_params = load_yaml(config_yaml)
+        self.world_params = self.config_params['world']
+        self.save_parameters = self.config_params['save_parameters']
+        self.trajectory_path = self.save_parameters['trajectory_path'] + self.world_params["map_name"]
         
-        vehicle_bp = blueprint_library.find(ego_params['brand'])
-        vehicle = world.spawn_actor(vehicle_bp, vehicle_transform)
-        vehicle.set_simulate_physics(ego_params['simulate_physics'])
-        vehicle.set_autopilot(ego_params['autopilot'])
-        traffic_manager_.ignore_signs_percentage(vehicle, ego_params['ignore_signs_percentage'])
+        self.trajectory_number = 0
+        self.data_number = 0
+        self.tick_number = 0
+        
+        self.csvfile = None
+        self.writer = None
+        self.save_trajectory_item()
+        self.init_time = time.time()
+        
+        # set client and world config
+        self.client = carla.Client('localhost', self.world_params["client_port"])
+        self.client.set_timeout(self.world_params["timeout"])
+        self.client.load_world(self.world_params["map_name"])
+        self.world = self.client.get_world()
+        self.origin_settings = self.world.get_settings()
+        # set weather
+        self._set_weather()
+        self.world.set_weather(self.weather)
+        # set hero vehicle and others
+        self.vehicles_list = []
+        self.hero_actor = None
+        self._select_hero_actor()
+        self.hero_actor.set_autopilot(True)
+        # set traffic 
+        self._setup_traffic_manager()
+        self.map = self.world.get_map()
+        get_all_lane_info(self.trajectory_path,self.map)
 
-        longcontrol_pid = PIDLongitudinalController(vehicle)
-        # target speed km/h
-        control = carla.VehicleControl()
-        # set the traffic light is Green
-        for actor in world.get_actors():
+    def tick(self):
+        self.world.tick()
+        self.tick_number += 1
+        if self.hero_actor is not None:
+            self.hero_transform = self.hero_actor.get_transform()
+        # set spectator
+        spectator_location = self.hero_transform.location + carla.Location(z = 300)
+        spectator_rotation = carla.Rotation(pitch = -90)
+        spectator_transform = carla.Transform(spectator_location, spectator_rotation)
+        spectator = self.world.get_spectator()
+        spectator.set_transform(spectator_transform)
+        if self.tick_number >= self.save_parameters['save_number']:
+            self.save_trajectory_data()
+            self.tick_number = 0
+        
+    def save_trajectory_item(self):
+        # set the path of trajectory 
+        if not os.path.isdir(self.trajectory_path):
+            os.makedirs(self.trajectory_path)
+        trajectory_number_str = str(self.trajectory_number).zfill(4)
+        trajectory_path_csv = self.trajectory_path + '/' + trajectory_number_str +'.csv'
+        self.csvfile = open(trajectory_path_csv,'w',newline='')
+        self.writer = csv.writer(self.csvfile)
+        item = ['TIMESTAMP','TRACK_ID','OBJECT_TYPE','X','Y','CITY_NAME']
+        self.writer.writerow(item)
+        self.init_time = time.time()
+
+    def save_trajectory_data(self):
+        max_trajectory_size = self.save_parameters['max_trajectory_size']
+        if self.data_number >= max_trajectory_size:
+            self.data_number = 0
+            self.trajectory_number += 1
+            self.csvfile.close()
+            self.save_trajectory_item() 
+        self.data_number += 1
+        for i in range(len(self.vehicles_list)):
+            actor_i = self.world.get_actor(self.vehicles_list[i])
+            pos = actor_i.get_location() 
+            # print( actor_i.attributes['role_name'])
+            if actor_i.attributes['role_name'] == 'hero':
+                track_id = str(0).zfill(6)
+                time_current = time.time() - self.init_time
+                value = [time_current,track_id,'AGENT',pos.x,pos.y,self.world_params["map_name"]]
+                self.writer.writerow(value)
+            else:
+                track_id = actor_i.id
+                # add log
+                # print( actor_i.id)
+                track_id = str(track_id).zfill(6)
+                time_current = time.time() - self.init_time
+                value = [time_current,track_id,'OTHERS',pos.x,pos.y,self.world_params["map_name"]]
+                self.writer.writerow(value)
+        
+
+    def _setup_traffic_manager(self):
+        world, client = self.world, self.client
+        traffic_manager_params = self.config_params['traffic_manager']
+        traffic_manager = client.get_trafficmanager() # Port to communicate with TM (default: 8000)
+        traffic_manager.set_global_distance_to_leading_vehicle(traffic_manager_params["global_distance_to_leading_vehicle"])
+        traffic_manager.ignore_signs_percentage(self.hero_actor, traffic_manager_params['ignore_signs_percentage'])
+        for actor in self.world.get_actors():
             if actor.type_id == 'traffic.traffic_light':
                 actor.freeze(True)
                 actor.set_state(carla.TrafficLightState.Green)
 
-        trajectory_number = 0
-        ego_trajectory_path = '/home/user/Database/Dense_carla_dataset/val/' + world_params["map_name"] 
-        if not os.path.isdir(ego_trajectory_path):
-            os.makedirs(ego_trajectory_path)
+        if traffic_manager_params["respawn_dormant_vehicles"]:
+            traffic_manager.set_respawn_dormant_vehicles(traffic_manager_params["respawn_dormant_vehicles"])
+        if traffic_manager_params["hybrid_physics_mode"]:
+            traffic_manager.set_hybrid_physics_mode(traffic_manager_params["hybrid_physics_mode"])
+            traffic_manager.set_hybrid_physics_radius(traffic_manager_params["hybrid_physics_radius"])
+        if traffic_manager_params["random_device_seed"] is not None:
+            traffic_manager.set_random_device_seed(traffic_manager_params["random_device_seed"])
+        
+        settings = self.world.get_settings()
+        traffic_manager.set_synchronous_mode(traffic_manager_params['sync_mode'])
+        if not settings.synchronous_mode:
+            synchronous_master = True
+            settings.synchronous_mode = traffic_manager_params['sync_mode']
+            settings.fixed_delta_seconds = traffic_manager_params['fixed_delta_seconds']
+            settings.substeping = traffic_manager_params['substeping']
+            settings.max_substeps = traffic_manager_params['max_substeps']
+            settings.max_substep_delta_time = traffic_manager_params['max_substep_delta_time']
+        else:
+            synchronous_master = False
+        world.apply_settings(settings)
+        blueprints = self._get_actor_blueprints(traffic_manager_params['filterv'], traffic_manager_params['generationv'])
+        blueprints = sorted(blueprints, key=lambda bp: bp.id)
 
-        map_manager = MapManager(world_params["map_name"])
+        spawn_points = world.get_map().get_spawn_points()
+        number_of_spawn_points = len(spawn_points)
+        number_of_vehicles = traffic_manager_params['number_of_vehicles']
+        if number_of_vehicles < number_of_spawn_points:
+            random.shuffle(spawn_points)
+        elif number_of_vehicles > number_of_spawn_points:
+            msg = 'requested %d vehicles, but could only find %d spawn points'
+            logging.warning(msg, self.number_of_vehicles, number_of_spawn_points)
+            number_of_vehicles = number_of_spawn_points
 
-        trajectory_number_str = str(trajectory_number).zfill(4)
-        ego_trajectory_path_csv = ego_trajectory_path + '/' + trajectory_number_str +'.csv'
-        csvfile = open(ego_trajectory_path_csv,'w',newline='')
-        writer = csv.writer(csvfile)
-        item = ['TIMESTAMP','TRACK_ID','OBJECT_TYPE','X','Y','CITY_NAME']
-        writer.writerow(item)
-        init_time = time.time()
+        # cannot import these directly.
+        SpawnActor = carla.command.SpawnActor
+        SetAutopilot = carla.command.SetAutopilot
+        FutureActor = carla.command.FutureActor
 
-        count = 0
-        number = 0
-        number_ = 0
-        while True:
-            world.tick()
-            # agent._update_information(vehicle)
-            ego_pose = vehicle.get_transform()
-            x = ego_pose.location.x
-            y = ego_pose.location.y
-            count += 1
-            if count > 12:
-                if number > 49:
-                    number = 0
-                    csvfile.close()
-                    trajectory_number += 1
-                    trajectory_number_str = str(trajectory_number).zfill(4)
-                    ego_trajectory_path_csv = ego_trajectory_path + '/' + trajectory_number_str +'.csv'
-                    csvfile = open(ego_trajectory_path_csv,'w',newline='')
-                    writer = csv.writer(csvfile)
-                    item = ['TIMESTAMP','TRACK_ID','OBJECT_TYPE','X','Y','CITY_NAME']
-                    writer.writerow(item)
-                    init_time = time.time()
-                time_current = time.time() - init_time
-                value = [time_current,trajectory_number_str,'AGENT',x,y,world_params["map_name"]]
-                writer.writerow(value)
-                number += 1
-                count = 0
-            # # test
-            # map_manager.update_state(ego_pose)
-            # lane_ids = map_manager.get_lane_ids_in_xy_bbox(query_search_range_manhattan = 50)
-            # print(lane_ids)
-            # local_lane_centerlines = [map_manager.get_lane_segment_centerline(lane_id) for lane_id in lane_ids]
-            # lane_ids111 = map_manager.find_local_lane_centerlines(query_search_range_manhattan = 50)
-            # vis_lanes = [map_manager.get_lane_segment_polygon(lane_id)[:, :2] for lane_id in lane_ids]
-            # t = []
-            # angle = 0
-            # for each in vis_lanes:
-            #     for point in each:
-            #         point[0], point[1] = rotate(point[0] - x, point[1] - y, angle)
-            #     num = len(each) // 2
-            #     t.append(each[:num].copy())
-            #     t.append(each[num:num * 2].copy())
-            # vis_lanes = t
+        # Spawn vehicles
+        batch = []
+        for n, transform in enumerate(spawn_points):
+            if n >= number_of_vehicles:
+                break
+            blueprint = random.choice(blueprints)
+            if blueprint.has_attribute('color'):
+                color = random.choice(blueprint.get_attribute('color').recommended_values)
+                blueprint.set_attribute('color', color)
+            if blueprint.has_attribute('driver_id'):
+                driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
+                blueprint.set_attribute('driver_id', driver_id)
+            blueprint.set_attribute('role_name', 'autopilot')
 
-            # lane_segment = [map_manager.city_lane_centerlines_dict(lane_id) for lane_id in lane_ids]
-            # print(lane_segment[0].get('has_traffic_control'))
+            # spawn the cars and set their autopilot and light state all together
+            batch.append(SpawnActor(blueprint, transform)
+                .then(SetAutopilot(FutureActor, True, traffic_manager.get_port())))
 
-            # set spectator
-            spectator_location = ego_pose.location + carla.Location(z = 300)
-            spectator_rotation = carla.Rotation(pitch = -90)
-            spectator_transform = carla.Transform(spectator_location, spectator_rotation)
-            spectator = world.get_spectator()
-            spectator.set_transform(spectator_transform)
-            number_ += 1
-            if number_ > 1:
-                control_la = vehicle.get_control()
-                throttle,brake = longcontrol_pid.run_step(15)
-                control_la.throttle = throttle
-                # print(control_la)
-                vehicle.apply_control(control_la)
-                number_ = 2
+        for response in client.apply_batch_sync(batch, synchronous_master):
+            if response.error:
+                logging.error(response.error)
+            else:
+                self.vehicles_list.append(response.actor_id)
 
-    finally:
-        csvfile.close()
-        world.apply_settings(origin_settings)
-        vehicle.destroy()
-        traffic_manager_.set_synchronous_mode(False)
-        # for sensor in sensor_list:
-        #     sensor.destroy()
+        print('spawned %d vehicles, press Ctrl+C to exit.' % (len(self.vehicles_list)))
+        # Example of how to use Traffic Manager parameters
+        traffic_manager.global_percentage_speed_difference(traffic_manager_params['global_percentage_speed_difference'])
 
+    def _get_actor_blueprints(self, filter, generation):
+        bps = self.world.get_blueprint_library().filter(filter)
+        if generation.lower() == "all": return bps
+        # If the filter returns only one bp, we assume that this one needed and therefore, we ignore the generation
+        if len(bps) == 1: return bps
+        int_generation = int(generation)
+        # Check if generation is in available generations
+        if int_generation in [1, 2]:
+            bps = [x for x in bps if int(x.get_attribute('generation')) == int_generation]
+            return bps
+        else:
+            print("Actor Generation is not valid. No actor will be spawned.")
+            return []
 
-    # # set the traffic light is Green
-    # for actor in world.get_actors():
-    #     if actor.type_id == 'traffic.traffic_light':
-    #         actor.freeze(True)
-    #         actor.set_state(carla.TrafficLightState.Green)
+    def _select_hero_actor(self):
+        hero_vehicles = [actor for actor in self.world.get_actors(
+        ) if 'vehicle' in actor.type_id and actor.attributes['role_name'] == 'hero']
+        if len(hero_vehicles) > 0:
+            self.hero_actor = random.choice(hero_vehicles)
+            self.hero_transform = self.hero_actor.get_transform()
+        else:
+            # Get a random blueprint.
+            blueprint = random.choice(self.world.get_blueprint_library().filter(self.config_params['traffic_manager']['filterv']))
+            blueprint.set_attribute('role_name', 'hero')
+            if blueprint.has_attribute('color'):
+                color = random.choice(blueprint.get_attribute('color').recommended_values)
+                blueprint.set_attribute('color', color)
+            # Spawn the player.
+            while self.hero_actor is None:
+                spawn_points = self.world.get_map().get_spawn_points()
+                spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+                self.hero_actor = self.world.try_spawn_actor(blueprint, spawn_point)
+            self.hero_transform = self.hero_actor.get_transform()
+            # Save it in order to destroy it when closing program
+            self.spawned_hero = self.hero_actor
+            self.vehicles_list.insert(0, self.hero_actor.id)
+
+    def destroy_vechicles(self):
+        self.world.apply_settings(self.origin_settings)
+        print('\ndestroying %d vehicles' % len(self.vehicles_list))
+        self.client.apply_batch([carla.command.DestroyActor(x) for x in self.vehicles_list])
+        # if self.spawned_hero is not None:
+        #     self.spawned_hero.destroy()
+        time.sleep(0.25)
+        self.csvfile.close()
+
+    def _set_weather(self):
+        """
+        Set CARLA weather params.
+        """
+        weather_settings = self.world_params["weather"]
+        self.weather = carla.WeatherParameters(
+        sun_altitude_angle = weather_settings['sun_altitude_angle'],
+        cloudiness = weather_settings['cloudiness'],
+        precipitation = weather_settings['precipitation'],
+        precipitation_deposits=weather_settings['precipitation_deposits'],
+        wind_intensity = weather_settings['wind_intensity'],
+        fog_density = weather_settings['fog_density'],
+        fog_distance = weather_settings['fog_distance'],
+        fog_falloff = weather_settings['fog_falloff'],
+        wetness = weather_settings['wetness'])
 
 if __name__ == "__main__":
+    logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
+    carla_client = CarlaSyncModeWithTraffic()
     try:
-        run_step()
-    except KeyboardInterrupt:
-        print(' - Exited by user.')
+        while True:
+            carla_client.tick()
+    finally:
+        carla_client.destroy_vechicles()
+
 

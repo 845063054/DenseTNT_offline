@@ -19,7 +19,7 @@ def should_remove_wp(wp0, wp1, wp2):
         return True
     return False
 
-def get_all_lane_info(carla_map):
+def get_all_lane_info(npy_path,carla_map):
     """
     From the topology generate all lane and crosswalk
     information in a dictionary under world's coordinate frame.
@@ -79,9 +79,10 @@ def get_all_lane_info(carla_map):
         # boundary information
         bound_info['lanes']['ids'] = lanes_id
         bound_info['lanes']['bounds'] = lanes_bounds
-
-    np.save('bound_info.npy', bound_info,allow_pickle=True)
-    np.save('lane_info.npy', lane_info,allow_pickle=True)
+    bound_info_path = npy_path + "/bound_info.npy"
+    lane_info_path = npy_path + "/lane_info.npy"
+    np.save(bound_info_path, bound_info,allow_pickle=True)
+    np.save(lane_info_path, lane_info,allow_pickle=True)
 
 
 def get_lane_ids_in_xy_bbox(x,y,bound_info,query_search_range_manhattan):
@@ -195,8 +196,6 @@ def find_local_lane_centerlines(x,y,bound_info,lane_info,query_search_range_manh
     local_lane_centerlines = [get_lane_segment_centerline(lane_id,lane_info) for lane_id in lane_ids]
     return np.array(local_lane_centerlines)
 
-
-@staticmethod
 def get_bounds(left_lane, right_lane):
     """
     Get boundary information of a lane.
