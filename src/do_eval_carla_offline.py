@@ -25,6 +25,7 @@ from torch.utils.data import SequentialSampler
 import structs
 import utils
 from modeling.vectornet import VectorNet
+from dataset_carla import file_path
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -99,10 +100,11 @@ def do_eval(args):
 
     for batch in eval_dataloader:
         pred_trajectory, pred_score, _ = model(batch, device)
-
         mapping = batch
         batch_size = pred_trajectory.shape[0]
         for i in range(batch_size):
+            draw_matrix(i,batch[i]['matrix'], batch[i]['polyline_spans'], batch[i]['map_start_polyline_idx'],
+                    pred_trajectory=batch[i]['vis.predict_trajs'],wait_key=None,win_name='argo_vis')
             assert pred_trajectory[i].shape == (6, args.future_frame_num, 2)
             assert pred_score[i].shape == (6,)
             argo_pred[mapping[i]['file_name']] = structs.MultiScoredTrajectory(pred_score[i].copy(), pred_trajectory[i].copy())
@@ -113,6 +115,50 @@ def do_eval(args):
     if args.argoverse:
         from dataset_carla import post_eval
         post_eval(args, file2pred, file2labels, DEs)
+
+def draw_matrix(idx, matrix, polygon_span, map_start_idx, pred_trajectory=None, 
+                win_name="matrix_vis", wait_key=None):
+    import cv2
+    w, h = 1600, 1600
+    offset = (w//2, h//2)
+    pix_meter = 0.125
+    image = np.zeros((h, w, 3), np.uint8)
+
+    def pts2pix(pts_x, pts_y):
+        new_pts = np.array([- pts_x / pix_meter + offset[0], - pts_y / pix_meter + offset[1]]).astype(np.int)
+        return (new_pts[0], new_pts[1])
+        
+    # draw submap
+    for i in range(map_start_idx,len(polygon_span)):
+        path_span_slice = polygon_span[i]
+        for j in range(path_span_slice.start, path_span_slice.stop):
+            way_pts_info = matrix[j]
+            color = (80, 80, 80)
+            cv2.line(image, pts2pix(way_pts_info[-3], way_pts_info[-4]), pts2pix(way_pts_info[-1], way_pts_info[-2]), color, 2)
+            cv2.circle(image, pts2pix(way_pts_info[-1], way_pts_info[-2]), 2, (0, 128, 128), thickness=-1)
+            if j == path_span_slice.start:
+                cv2.putText(image, 'path_seg:'+str(i), pts2pix(way_pts_info[-1], way_pts_info[-2]), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), thickness=1)
+    # draw trajectory
+    for i in range(map_start_idx):
+        traj_span_slice = polygon_span[i]
+        for j in range(traj_span_slice.start, traj_span_slice.stop):
+            traj_pts_info = matrix[j]
+            color = (64, 192, 64)
+            # traj_pts_info: line_pre[0], line_pre[1], x, y, time_stamp, is_av, is_agent, is_others, len(polyline_spans), i
+            cv2.line(image, pts2pix(traj_pts_info[0], traj_pts_info[1]), pts2pix(traj_pts_info[2], traj_pts_info[3]), color, 2)
+            if j == traj_span_slice.start:
+                cv2.putText(image, 'traj:'+str(i), pts2pix(traj_pts_info[2], traj_pts_info[3]), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), thickness=1)
+    # draw predicted trajectory if not None
+    if pred_trajectory is not None:
+        # pred_trajectory = pred_trajectory.reshape([6, 30, 2])
+        num_traj, num_pts, _ = pred_trajectory.shape
+        for i in range(num_traj):
+            for j in range(1, num_pts-1):
+                color = (64, 64, 255)
+                cv2.line(image, pts2pix(pred_trajectory[i,j-1,0], pred_trajectory[i,j-1,1]), pts2pix(pred_trajectory[i,j,0], pred_trajectory[i,j,1]), color, 2)
+    file_name = file_path() + '/' + str(idx) +'.png'
+    cv2.imwrite(file_name,image)
+    cv2.waitKey(wait_key)
 
 '''
 mapping

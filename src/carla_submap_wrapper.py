@@ -222,31 +222,6 @@ def get_bounds(left_lane, right_lane):
     return bounds
 
 
-def world_to_sensor(cords, sensor_transform):
-    """
-    Transform coordinates from world reference to sensor reference.
-
-    Parameters
-    ----------
-    cords : np.ndarray
-        Coordinates under world reference, shape: (4, n).
-
-    sensor_transform : carla.Transform
-        Sensor position in the world.
-
-    Returns
-    -------
-    sensor_cords : np.ndarray
-        Coordinates in the sensor reference.
-
-    """
-    sensor_world_matrix = x_to_world_transformation(sensor_transform)
-    world_sensor_matrix = np.linalg.inv(sensor_world_matrix)
-    sensor_cords = np.dot(world_sensor_matrix, cords)
-
-    return sensor_cords
-
-
 def city_lane_centerlines_dict(lane_info, lane_id):
     lane_centerlines_dict = {}
     lane_centerlines_dict['has_traffic_control'] = lane_info[lane_id]['has_traffic_control']  # True or Fasle
@@ -268,54 +243,6 @@ def city_lane_centerlines_dict(lane_info, lane_id):
 def lateral_shift(transform,shift):
     transform.rotation.yaw += 90
     return transform.location + shift * transform.get_forward_vector()
-
-
-def x_to_world_transformation(transform):
-    """
-    Get the transformation matrix from x(it can be vehicle or sensor)
-    coordinates to world coordinate.
-
-    Parameters
-    ----------
-    transform : carla.Transform
-        The transform that contains location and rotation
-
-    Returns
-    -------
-    matrix : np.ndarray
-        The transformation matrx.
-
-    """
-    rotation = transform.rotation
-    location = transform.location
-
-    # used for rotation matrix
-    c_y = np.cos(np.radians(rotation.yaw))
-    s_y = np.sin(np.radians(rotation.yaw))
-    c_r = np.cos(np.radians(rotation.roll))
-    s_r = np.sin(np.radians(rotation.roll))
-    c_p = np.cos(np.radians(rotation.pitch))
-    s_p = np.sin(np.radians(rotation.pitch))
-
-    matrix = np.identity(4)
-    # translation matrix
-    matrix[0, 3] = location.x
-    matrix[1, 3] = location.y
-    matrix[2, 3] = location.z
-
-    # rotation matrix
-    matrix[0, 0] = c_p * c_y
-    matrix[0, 1] = c_y * s_p * s_r - s_y * c_r
-    matrix[0, 2] = -c_y * s_p * c_r - s_y * s_r
-    matrix[1, 0] = s_y * c_p
-    matrix[1, 1] = s_y * s_p * s_r + c_y * c_r
-    matrix[1, 2] = -s_y * s_p * c_r + c_y * s_r
-    matrix[2, 0] = s_p
-    matrix[2, 1] = -c_p * s_r
-    matrix[2, 2] = c_p * c_r
-
-    return matrix
-
 
 def list_loc2array(list_location):
         """

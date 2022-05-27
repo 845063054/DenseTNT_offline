@@ -36,7 +36,7 @@ import torch
 # import carla
 
 from tqdm import tqdm
-
+from yaml_utils import load_yaml
 import utils_cython
 import utils
 from utils import get_name, get_file_name_int, get_angle, logging, rotate, round_value, get_pad_vector, get_dis, get_subdivide_polygons
@@ -61,7 +61,16 @@ VECTOR_PRE_X = 0
 VECTOR_PRE_Y = 1
 VECTOR_X = 2
 VECTOR_Y = 3
-
+        
+def file_path():       
+    config_yaml = os.path.join(os.path.dirname(os.path.realpath(__file__)),'carla_config.yaml')
+    if not os.path.isfile(config_yaml):
+        sys.exit("carla_config.yaml not found!")
+    config_params = load_yaml(config_yaml)
+    world_params = config_params['world']
+    save_parameters = config_params['save_parameters']
+    trajectory_path = save_parameters['trajectory_path'] + world_params["map_name"]
+    return trajectory_path
 
 def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[], mapping=None):
     """
@@ -72,8 +81,9 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
         pass
     else:
         if 'semantic_lane' in args.other_params:
-            boun_info_path = '/home/user/Database/Dense_carla_dataset/val/Town01/bound_info.npy'
-            lane_info_path = '/home/user/Database/Dense_carla_dataset/val/Town01/lane_info.npy'
+
+            boun_info_path = file_path() + '/bound_info.npy'
+            lane_info_path = file_path() + '/lane_info.npy'
             if not os.path.exists(boun_info_path) or not os.path.exists(lane_info_path) :
                 print(boun_info_path + ' or ' + lane_info_path + 'is not exist')
             else:
@@ -204,6 +214,7 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
                     vectors.append(vector)
                 point_pre = point
 
+
             end = len(vectors)
             if start < end:
                 polyline_spans.append([start, end])
@@ -321,7 +332,6 @@ def preprocess(args, id2info, mapping):
 
     matrix = np.array(vectors)
 
-    draw_matrix(matrix, polyline_spans, mapping['map_start_polyline_idx'])
     # matrix = np.array(vectors, dtype=float)
     # del vectors
 
@@ -607,48 +617,4 @@ def post_eval(args, file2pred, file2labels, DEs):
 
     utils.logging(vars(args), is_json=True,
                   type=score_file, to_screen=True, append_time=True)
-
-def draw_matrix(matrix, polygon_span, map_start_idx, pred_trajectory=None, win_name="matrix_vis", wait_key=None):
-    import cv2
-    w, h = 1600, 1600
-    offset = (w//2, h//2)
-    pix_meter = 0.125
-    image = np.zeros((h, w, 3), np.uint8)
-
-    def pts2pix(pts_x, pts_y):
-        new_pts = np.array([- pts_x / pix_meter + offset[0], - pts_y / pix_meter + offset[1]]).astype(np.int)
-        return (new_pts[0], new_pts[1])
-        
-    # draw submap
-    for i in range(map_start_idx,len(polygon_span)):
-        path_span_slice = polygon_span[i]
-        for j in range(path_span_slice.start, path_span_slice.stop):
-            way_pts_info = matrix[j]
-            color = (80, 80, 80)
-            cv2.line(image, pts2pix(way_pts_info[-3], way_pts_info[-4]), pts2pix(way_pts_info[-1], way_pts_info[-2]), color, 2)
-            cv2.circle(image, pts2pix(way_pts_info[-1], way_pts_info[-2]), 2, (0, 128, 128), thickness=-1)
-            if j == path_span_slice.start:
-                cv2.putText(image, 'path_seg:'+str(i), pts2pix(way_pts_info[-1], way_pts_info[-2]), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), thickness=1)
-    # draw trajectory
-    for i in range(map_start_idx):
-        traj_span_slice = polygon_span[i]
-        for j in range(traj_span_slice.start, traj_span_slice.stop):
-            traj_pts_info = matrix[j]
-            color = (64, 192, 64)
-            # traj_pts_info: line_pre[0], line_pre[1], x, y, time_stamp, is_av, is_agent, is_others, len(polyline_spans), i
-            cv2.line(image, pts2pix(traj_pts_info[0], traj_pts_info[1]), pts2pix(traj_pts_info[2], traj_pts_info[3]), color, 2)
-            if j == traj_span_slice.start:
-                cv2.putText(image, 'traj:'+str(i), pts2pix(traj_pts_info[2], traj_pts_info[3]), cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 255, 255), thickness=1)
-    # draw predicted trajectory if not None
-    if pred_trajectory is not None:
-        # pred_trajectory = pred_trajectory.reshape([6, 30, 2])
-        num_traj, num_pts, _ = pred_trajectory.shape
-        for i in range(num_traj):
-            for j in range(1, num_pts-1):
-                color = (64, 64, 255)
-                cv2.line(image, pts2pix(pred_trajectory[i,j-1,0], pred_trajectory[i,j-1,1]), pts2pix(pred_trajectory[i,j,0], pred_trajectory[i,j,1]), color, 2)
-
-    cv2.imshow(win_name, image)
-    cv2.waitKey(wait_key)
-    return image
 
